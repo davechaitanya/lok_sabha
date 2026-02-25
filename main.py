@@ -6,9 +6,12 @@ FastAPI application for Lok Sabha Database
 
 from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, Response
 from typing import Optional
 import os
 from dotenv import load_dotenv
+import requests as req
+from io import BytesIO
 
 from database import get_db, test_connection
 from models import *
@@ -588,6 +591,90 @@ def get_attendance(
     cursor.close()
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
+
+# ============================================================
+# IMAGE PROXY ENDPOINTS
+# ============================================================
+
+@app.get("/api/image-proxy", tags=["Utilities"])
+async def image_proxy(url: str = Query(..., description="Image URL to proxy")):
+    """
+    Universal image proxy endpoint - Solves CORS issues for external images
+    
+    Usage: 
+        /api/image-proxy?url=https://sansad.in/images/member123.jpg
+    
+    Frontend usage:
+        <img src="https://your-api.com/api/image-proxy?url=ENCODED_IMAGE_URL" />
+    """
+    try:
+        response = req.get(url, timeout=10, stream=True)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('content-type', 'image/jpeg')
+        
+        return StreamingResponse(
+            BytesIO(response.content),
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",  # Cache for 24 hours
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Image not found: {str(e)}")
+
+
+@app.get("/api/members/{mp_code}/image", tags=["Members"])
+def get_member_image(mp_code: int, db = Depends(get_db)):
+    """
+    Get member's profile image directly - Returns actual image file
+    
+    Usage:
+        /api/members/344/image
+    
+    Frontend usage:
+        <img src="https://your-api.com/api/members/344/image" alt="Member" />
+    
+    This endpoint:
+    - Fetches the member's image_url from database
+    - Proxies the image through your API
+    - Solves CORS issues
+    - Caches for 24 hours
+    """
+    cursor = db.cursor(dictionary=True)
+    
+    # Get member's image URL
+    try:
+        cursor.execute("SELECT image_url FROM lok_sabha_members WHERE mp_code = %s", (mp_code,))
+        member = cursor.fetchone()
+    except:
+        cursor.execute("SELECT image_url FROM lok_sabha_members WHERE profile_link LIKE %s", (f'%/{mp_code}',))
+        member = cursor.fetchone()
+    
+    cursor.close()
+    
+    if not member or not member.get('image_url'):
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    image_url = member['image_url']
+    
+    try:
+        response = req.get(image_url, timeout=10)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('content-type', 'image/jpeg')
+        
+        return Response(
+            content=response.content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Failed to fetch image: {str(e)}")
 
 # Run with: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 if __name__ == "__main__":
