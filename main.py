@@ -676,6 +676,268 @@ def get_member_image(mp_code: int, db = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to fetch image: {str(e)}")
 
+# ============================================================
+# NEW DATA TRACKING ENDPOINTS
+# ============================================================
+
+@app.get("/api/new-data/summary", tags=["New Data"])
+def get_new_data_summary(db = Depends(get_db)):
+    """Get summary of new data across all tables"""
+    cursor = db.cursor(dictionary=True)
+    
+    tables = [
+        'assurance', 'gallery', 'member_attendance', 'member_bills',
+        'member_committees', 'member_dashboard', 'government_bills',
+        'member_debates', 'member_other_details', 'member_personal_details',
+        'member_questions', 'member_special_mentions', 'mp_tour'
+    ]
+    
+    summary = []
+    for table in tables:
+        cursor.execute(f"SELECT COUNT(*) as count FROM {table} WHERE is_new = TRUE")
+        count = cursor.fetchone()['count']
+        if count > 0:
+            summary.append({"table": table, "new_count": count})
+    
+    cursor.close()
+    return {
+        "total_new_records": sum(s['new_count'] for s in summary),
+        "tables": summary
+    }
+
+
+@app.get("/api/questions/new", tags=["New Data"])
+def get_new_questions(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    db = Depends(get_db)
+):
+    """Get only NEW questions that haven't been viewed"""
+    cursor = db.cursor(dictionary=True)
+    offset = (page - 1) * size
+    
+    cursor.execute("SELECT COUNT(*) as total FROM member_questions WHERE is_new = TRUE")
+    total = cursor.fetchone()['total']
+    
+    cursor.execute("""
+        SELECT * FROM member_questions 
+        WHERE is_new = TRUE 
+        ORDER BY scraped_at DESC 
+        LIMIT %s OFFSET %s
+    """, (size, offset))
+    data = cursor.fetchall()
+    cursor.close()
+    
+    return {
+        "total_new": total,
+        "page": page,
+        "size": size,
+        "pages": (total + size - 1) // size,
+        "data": data
+    }
+
+
+@app.get("/api/debates/new", tags=["New Data"])
+def get_new_debates(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    db = Depends(get_db)
+):
+    """Get only NEW debates"""
+    cursor = db.cursor(dictionary=True)
+    offset = (page - 1) * size
+    
+    cursor.execute("SELECT COUNT(*) as total FROM member_debates WHERE is_new = TRUE")
+    total = cursor.fetchone()['total']
+    
+    cursor.execute("""
+        SELECT * FROM member_debates 
+        WHERE is_new = TRUE 
+        ORDER BY scraped_at DESC 
+        LIMIT %s OFFSET %s
+    """, (size, offset))
+    data = cursor.fetchall()
+    cursor.close()
+    
+    return {"total_new": total, "page": page, "size": size, "data": data}
+
+
+@app.get("/api/bills/government/new", tags=["New Data"])
+def get_new_government_bills(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    db = Depends(get_db)
+):
+    """Get only NEW government bills"""
+    cursor = db.cursor(dictionary=True)
+    offset = (page - 1) * size
+    
+    cursor.execute("SELECT COUNT(*) as total FROM government_bills WHERE is_new = TRUE")
+    total = cursor.fetchone()['total']
+    
+    cursor.execute("""
+        SELECT * FROM government_bills 
+        WHERE is_new = TRUE 
+        ORDER BY scraped_at DESC 
+        LIMIT %s OFFSET %s
+    """, (size, offset))
+    data = cursor.fetchall()
+    cursor.close()
+    
+    return {"total_new": total, "page": page, "size": size, "data": data}
+
+
+@app.get("/api/special-mentions/new", tags=["New Data"])
+def get_new_special_mentions(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    db = Depends(get_db)
+):
+    """Get only NEW special mentions"""
+    cursor = db.cursor(dictionary=True)
+    offset = (page - 1) * size
+    
+    cursor.execute("SELECT COUNT(*) as total FROM member_special_mentions WHERE is_new = TRUE")
+    total = cursor.fetchone()['total']
+    
+    cursor.execute("""
+        SELECT * FROM member_special_mentions 
+        WHERE is_new = TRUE 
+        ORDER BY scraped_at DESC 
+        LIMIT %s OFFSET %s
+    """, (size, offset))
+    data = cursor.fetchall()
+    cursor.close()
+    
+    return {"total_new": total, "page": page, "size": size, "data": data}
+
+
+@app.get("/api/members/{mp_code}/new-activities", tags=["New Data"])
+def get_member_new_activities(mp_code: int, db = Depends(get_db)):
+    """Get ALL new activities for a specific member"""
+    cursor = db.cursor(dictionary=True)
+    
+    activities = {}
+    
+    # New questions
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM member_questions 
+        WHERE mp_code = %s AND is_new = TRUE
+    """, (mp_code,))
+    activities['new_questions'] = cursor.fetchone()['count']
+    
+    # New debates
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM member_debates 
+        WHERE mp_code = %s AND is_new = TRUE
+    """, (mp_code,))
+    activities['new_debates'] = cursor.fetchone()['count']
+    
+    # New bills
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM member_bills 
+        WHERE mp_code = %s AND is_new = TRUE
+    """, (mp_code,))
+    activities['new_bills'] = cursor.fetchone()['count']
+    
+    # New special mentions
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM member_special_mentions 
+        WHERE mp_code = %s AND is_new = TRUE
+    """, (mp_code,))
+    activities['new_mentions'] = cursor.fetchone()['count']
+    
+    cursor.close()
+    
+    return {
+        "mp_code": mp_code,
+        "activities": activities,
+        "total_new": sum(activities.values())
+    }
+
+
+@app.post("/api/questions/{question_id}/mark-read", tags=["New Data"])
+def mark_question_read(question_id: int, db = Depends(get_db)):
+    """Mark a question as read (not new anymore)"""
+    cursor = db.cursor()
+    cursor.execute("""
+        UPDATE member_questions 
+        SET is_new = FALSE 
+        WHERE questionId = %s
+    """, (question_id,))
+    db.commit()
+    affected = cursor.rowcount
+    cursor.close()
+    
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    return {"status": "success", "message": "Question marked as read"}
+
+
+@app.post("/api/debates/{debate_id}/mark-read", tags=["New Data"])
+def mark_debate_read(debate_id: int, db = Depends(get_db)):
+    """Mark a debate as read"""
+    cursor = db.cursor()
+    cursor.execute("""
+        UPDATE member_debates 
+        SET is_new = FALSE 
+        WHERE debateId = %s
+    """, (debate_id,))
+    db.commit()
+    affected = cursor.rowcount
+    cursor.close()
+    
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Debate not found")
+    
+    return {"status": "success", "message": "Debate marked as read"}
+
+
+@app.post("/api/new-data/mark-all-read/{table_name}", tags=["New Data"])
+def mark_all_read(table_name: str, db = Depends(get_db)):
+    """Mark all records in a table as read (is_new = FALSE)"""
+    allowed_tables = [
+        'member_questions', 'member_debates', 'member_special_mentions',
+        'government_bills', 'member_bills', 'assurance', 'gallery'
+    ]
+    
+    if table_name not in allowed_tables:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+    
+    cursor = db.cursor()
+    cursor.execute(f"UPDATE {table_name} SET is_new = FALSE WHERE is_new = TRUE")
+    db.commit()
+    affected = cursor.rowcount
+    cursor.close()
+    
+    return {
+        "status": "success",
+        "table": table_name,
+        "records_marked": affected
+    }
+
+
+@app.get("/api/scrape-tracker", tags=["New Data"])
+def get_scrape_tracker(db = Depends(get_db)):
+    """Get scraping statistics for all tables"""
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT 
+            table_name,
+            last_max_id,
+            last_scrape_time,
+            new_records_count,
+            total_records,
+            scrape_status
+        FROM scrape_tracker
+        ORDER BY last_scrape_time DESC
+    """)
+    data = cursor.fetchall()
+    cursor.close()
+    
+    return {"trackers": data}
+
 # Run with: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 if __name__ == "__main__":
     import uvicorn
