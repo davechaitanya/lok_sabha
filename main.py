@@ -16,10 +16,8 @@ from io import BytesIO
 from database import get_db, test_connection
 from models import *
 
-# Load environment variables
 load_dotenv()
 
-# Create FastAPI app
 app = FastAPI(
     title=os.getenv('API_TITLE', 'Lok Sabha Database API'),
     description=os.getenv('API_DESCRIPTION', 'REST API for Lok Sabha member data'),
@@ -28,18 +26,14 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change to specific domains in production
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ============================================================
-# HEALTH CHECK & ROOT
-# ============================================================
 
 @app.get("/", tags=["Root"])
 def root():
@@ -63,9 +57,52 @@ def health_check():
         "message": "API is running" if status == "healthy" else "Database connection failed"
     }
 
-# ============================================================
-# MEMBERS
-# ============================================================
+
+@app.get("/api/members", response_model=PaginatedResponse, tags=["Members"])
+# def get_members(
+#     page: int = Query(1, ge=1, description="Page number"),
+#     size: int = Query(50, ge=1, le=100, description="Items per page"),
+#     party: Optional[str] = Query(None, description="Filter by party name"),
+#     state: Optional[str] = Query(None, description="Filter by state"),
+#     loksabha: Optional[int] = Query(None, description="Filter by Lok Sabha term"),
+#     db = Depends(get_db)
+# ):
+#     """Get all members with pagination and filters"""
+#     cursor = db.cursor(dictionary=True)
+    
+#     where_clauses = []
+#     params = []
+    
+#     if party:
+#         where_clauses.append("party LIKE %s")
+#         params.append(f"%{party}%")
+#     if state:
+#         where_clauses.append("state LIKE %s")
+#         params.append(f"%{state}%")
+#     if loksabha:
+#         where_clauses.append("terms LIKE %s")
+#         params.append(f"%{loksabha}%")
+    
+#     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+#     offset = (page - 1) * size
+    
+#     cursor.execute(f"SELECT COUNT(*) as total FROM lok_sabha_members WHERE {where_sql}", params)
+#     total = cursor.fetchone()['total']
+    
+#     cursor.execute(
+#         f"SELECT * FROM lok_sabha_members WHERE {where_sql} ORDER BY name LIMIT %s OFFSET %s",
+#         params + [size, offset]
+#     )
+#     data = cursor.fetchall()
+#     cursor.close()
+    
+#     return {
+#         "total": total,
+#         "page": page,
+#         "size": size,
+#         "pages": (total + size - 1) // size,
+#         "data": data
+#     }
 
 @app.get("/api/members", response_model=PaginatedResponse, tags=["Members"])
 def get_members(
@@ -73,6 +110,8 @@ def get_members(
     size: int = Query(50, ge=1, le=100, description="Items per page"),
     party: Optional[str] = Query(None, description="Filter by party name"),
     state: Optional[str] = Query(None, description="Filter by state"),
+    status: Optional[str] = Query(None, description="Filter by status: Sitting or Former"),
+    search: Optional[str] = Query(None, description="Search by name, constituency, party"),
     loksabha: Optional[int] = Query(None, description="Filter by Lok Sabha term"),
     db = Depends(get_db)
 ):
@@ -82,12 +121,18 @@ def get_members(
     where_clauses = []
     params = []
     
+    if search:
+        where_clauses.append("(name LIKE %s OR constituency LIKE %s OR party LIKE %s OR state LIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
     if party:
         where_clauses.append("party LIKE %s")
         params.append(f"%{party}%")
     if state:
         where_clauses.append("state LIKE %s")
         params.append(f"%{state}%")
+    if status:
+        where_clauses.append("status = %s")
+        params.append(status)
     if loksabha:
         where_clauses.append("terms LIKE %s")
         params.append(f"%{loksabha}%")
@@ -95,11 +140,9 @@ def get_members(
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
     offset = (page - 1) * size
     
-    # Get total count
     cursor.execute(f"SELECT COUNT(*) as total FROM lok_sabha_members WHERE {where_sql}", params)
     total = cursor.fetchone()['total']
     
-    # Get data
     cursor.execute(
         f"SELECT * FROM lok_sabha_members WHERE {where_sql} ORDER BY name LIMIT %s OFFSET %s",
         params + [size, offset]
@@ -132,14 +175,12 @@ def get_complete_profile(mp_code: int, db = Depends(get_db)):
     """Get complete member profile with all statistics"""
     cursor = db.cursor(dictionary=True)
     
-    # Get member info
     cursor.execute("SELECT * FROM lok_sabha_members WHERE mp_code = %s", (mp_code,))
     member = cursor.fetchone()
     
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     
-    # Get statistics
     cursor.execute("SELECT COUNT(*) as count FROM assurance WHERE mp_code = %s", (mp_code,))
     assurances = cursor.fetchone()['count']
     
@@ -172,9 +213,6 @@ def get_complete_profile(mp_code: int, db = Depends(get_db)):
         }
     }
 
-# ============================================================
-# ASSURANCES
-# ============================================================
 
 @app.get("/api/assurances", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_assurances(
@@ -212,9 +250,6 @@ def get_assurances(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# GALLERY
-# ============================================================
 
 @app.get("/api/gallery", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_gallery(
@@ -252,9 +287,6 @@ def get_gallery(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# COMMITTEES
-# ============================================================
 
 @app.get("/api/committees", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_committees(
@@ -292,9 +324,6 @@ def get_committees(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# BILLS
-# ============================================================
 
 @app.get("/api/bills/private", response_model=PaginatedResponse, tags=["Bills"])
 def get_private_bills(
@@ -368,9 +397,6 @@ def get_government_bills(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# QUESTIONS
-# ============================================================
 
 @app.get("/api/questions", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_questions(
@@ -404,9 +430,6 @@ def get_questions(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# DEBATES
-# ============================================================
 
 @app.get("/api/debates", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_debates(
@@ -444,9 +467,6 @@ def get_debates(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# SPECIAL MENTIONS
-# ============================================================
 
 @app.get("/api/special-mentions", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_special_mentions(
@@ -480,9 +500,6 @@ def get_special_mentions(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# TOURS
-# ============================================================
 
 @app.get("/api/tours", response_model=PaginatedResponse, tags=["Parliamentary Activities"])
 def get_tours(
@@ -516,9 +533,6 @@ def get_tours(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# PERSONAL DETAILS
-# ============================================================
 
 @app.get("/api/personal-details/{mp_code}", tags=["Member Details"])
 def get_personal_details(mp_code: int, db = Depends(get_db)):
@@ -592,9 +606,6 @@ def get_attendance(
     
     return {"total": total, "page": page, "size": size, "pages": (total + size - 1) // size, "data": data}
 
-# ============================================================
-# IMAGE PROXY ENDPOINTS
-# ============================================================
 
 @app.get("/api/image-proxy", tags=["Utilities"])
 async def image_proxy(url: str = Query(..., description="Image URL to proxy")):
@@ -644,7 +655,6 @@ def get_member_image(mp_code: int, db = Depends(get_db)):
     """
     cursor = db.cursor(dictionary=True)
     
-    # Get member's image URL
     try:
         cursor.execute("SELECT image_url FROM lok_sabha_members WHERE mp_code = %s", (mp_code,))
         member = cursor.fetchone()
@@ -676,9 +686,6 @@ def get_member_image(mp_code: int, db = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to fetch image: {str(e)}")
 
-# ============================================================
-# NEW DATA TRACKING ENDPOINTS
-# ============================================================
 
 @app.get("/api/new-data/summary", tags=["New Data"])
 def get_new_data_summary(db = Depends(get_db)):
@@ -819,28 +826,24 @@ def get_member_new_activities(mp_code: int, db = Depends(get_db)):
     
     activities = {}
     
-    # New questions
     cursor.execute("""
         SELECT COUNT(*) as count FROM member_questions 
         WHERE mp_code = %s AND is_new = TRUE
     """, (mp_code,))
     activities['new_questions'] = cursor.fetchone()['count']
     
-    # New debates
     cursor.execute("""
         SELECT COUNT(*) as count FROM member_debates 
         WHERE mp_code = %s AND is_new = TRUE
     """, (mp_code,))
     activities['new_debates'] = cursor.fetchone()['count']
     
-    # New bills
     cursor.execute("""
         SELECT COUNT(*) as count FROM member_bills 
         WHERE mp_code = %s AND is_new = TRUE
     """, (mp_code,))
     activities['new_bills'] = cursor.fetchone()['count']
     
-    # New special mentions
     cursor.execute("""
         SELECT COUNT(*) as count FROM member_special_mentions 
         WHERE mp_code = %s AND is_new = TRUE
@@ -938,7 +941,6 @@ def get_scrape_tracker(db = Depends(get_db)):
     
     return {"trackers": data}
 
-# Run with: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8000))
